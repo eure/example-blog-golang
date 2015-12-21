@@ -1,0 +1,107 @@
+#!/bin/bash
+
+#===================
+#  setting
+#===================
+
+REPO_ROOT=`git rev-parse --show-toplevel`
+GOLINT_TMP="/tmp/.golint.txt"
+
+GVM_INIT=$HOME/.gvm/scripts/gvm
+GVM_VERSION="stable"
+
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+    against=HEAD
+else
+    # Initial commit: diff against an empty tree object
+    against=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+fi
+
+exec 1>&2
+
+#===================
+#  function
+#===================
+
+function initEnv() {
+  PATH="$PATH:/usr/local/bin"
+  which gvm > /dev/null || (test -s $GVM_INIT && source $GVM_INIT)
+}
+
+# Goファイル判定
+function isGoFile() {
+  echo "$1" | egrep '\.go$' > /dev/null
+}
+
+# golintのインストール確認
+function isGolintInstalled() {
+  which golint > /dev/null || { gvm use $GVM_VERSION > /dev/null && which golint > /dev/null; }
+}
+
+#===================
+#  main routine
+#===================
+
+IS_ERROR=0
+FILES=`git diff-index --name-status $against --`
+ADD_FILES=`echo -n "$FILES"| egrep '^(A|M)'  | cut -c3-`
+
+initEnv
+
+isGolintInstalled
+if [ "$?" -ne 0 ]; then
+  echo "[ERROR] golint is not installed"
+  echo "--- type below code to install ---"
+  echo "$ go get github.com/golang/lint/golint"
+  echo ""
+  IS_ERROR=1
+  exit $IS_ERROR
+fi
+
+for FILE in `echo -n "$ADD_FILES" `; do
+  isGoFile $FILE
+  if [ "$?" -eq 0 ]; then
+    echo "[$FILE]"
+    gofmt -s -w $FILE
+    if [ "$?" -ne 0 ]; then
+      IS_ERROR=2
+    fi
+    
+    go vet $FILE
+    if [ "$?" -ne 0 ]; then
+      IS_ERROR=3
+    fi
+
+    golint $FILE | tee -a $GOLINT_TMP
+
+    echo ""
+    continue
+  fi
+done
+
+if [ -s "$GOLINT_TMP" ]; then
+  rm $GOLINT_TMP 
+  IS_ERROR=4
+fi
+
+case "$IS_ERROR" in
+  2)
+    echo "!!!!"
+    echo "!! [Go fmt Error] Fix above gofmt errors"
+    ;;
+  3)
+    echo "!!!!"
+    echo "!! [Go vet Error] Fix above vet errors"
+    ;;
+  4)
+    echo "!!!!"
+    echo "!! [Go LINT Error] Fix above lint errors"
+    ;;
+  *)
+    echo "[Success] no errors detected"
+    ;;
+esac
+
+exit $IS_ERROR
